@@ -12,6 +12,12 @@ export class TransformCharacter {
 		let target = game.user.targets.first();
 	
 		let tActor = null;
+		if (target) {
+			// If targeting yourself just transform back.
+			tActor = target.actor;
+			if (tActor.uuid == actor.uuid)
+				target = null;
+		}
 
 		if (!target) {
 			let targetUuid = actor.getFlag('trans-char', 'uuid');
@@ -26,11 +32,15 @@ export class TransformCharacter {
 				return;
 			}
 		} else {
-			tActor = target.actor;
-			if (tActor.uuid == actor.uuid) {
-				ui.notifications.warn(`The ${actor.name} token can't transform into itself.`);
+			const confirmation = await Dialog.confirm({
+			  title: "Perform Transformation?",
+			  content: `<p>Transform ${actor.name} into ${tActor.name}?</p><p></p>`,
+			  yes: (html) => { return true; },
+			  no: (html) => { return false; },
+			});			
+			if (!confirmation)
 				return;
-			}
+			
 			await actor.setFlag('trans-char', 'uuid', tActor.uuid);
 			await tActor.setFlag('trans-char', 'uuid', actor.uuid);
 		}
