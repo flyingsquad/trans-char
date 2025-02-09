@@ -87,17 +87,56 @@ export class TransformCharacter {
 			await tActor.toggleActiveEffect(stat);
 		}
 
+		let tDoc = null;
 		if (!target) {
 			// Create a token for the transformed actor and delete the current token.
-			const tDoc = await tActor.getTokenDocument({ x: token.x, y: token.y });
-			await canvas.scene.createEmbeddedDocuments('Token', [tDoc]);
-			await canvas.scene.deleteEmbeddedDocuments('Token', [token.id]);
+			tDoc = await tActor.getTokenDocument({ x: token.x, y: token.y });
+			let targets = await canvas.scene.createEmbeddedDocuments('Token', [tDoc]);
+			target = targets[0];
 		} else {
 			// Move the token transformed into to the current token's location.
 			target.document.update({"x": token.x, "y": token.y});
-			await canvas.scene.deleteEmbeddedDocuments('Token', [token.id]);			
+			tDoc = target.document;
 		}
+		/*
+		let combat = game.combats.find(c => c.scene._id == canvas.scene.id);
+		let combatants = combat.combatants.filter(c => c.tokenId == token.id);
+		for (let combatant of combatants) {
+			await combatant.update({
+				"_id": combatant.id,
+				"tokenId": target.id,
+				"actorId": target.actorId
+			});
+		}
+		*/
+		await this.swapTokensInCombat(token, target);
+		await canvas.scene.deleteEmbeddedDocuments('Token', [token.id]);
 	}
+
+    async swapTokensInCombat(currentToken, newToken) {
+        let combats = game.combats.filter(c => c.combatants.find(c => c.tokenId == currentToken.id));
+        if (combats.length > 0) {
+            let combatUpdateData = [];
+            for (let combat of combats) {
+                let combatants = combat.combatants.filter(c => c.tokenId == currentToken.id);
+                let combatantUpdateData = [];
+                for (let combatant of combatants) {
+                    combatantUpdateData.push({
+                        _id: combatant.id,
+                        tokenId: newToken.id,
+                        sceneId: currentToken.parent.id,
+                        actorId: newToken.actor.id,
+                    });
+                }
+
+                combatUpdateData.push({
+                    combatId: combat.id,
+                    combatantUpdateData: combatantUpdateData,
+                });
+            }
+            await game.swadeShapeChanger.socket.executeAsGM("updateCombatant", combatUpdateData);
+        }
+    }
 
 	static {
 		console.log("swade-charcheck | Swade Character Check loaded.");
