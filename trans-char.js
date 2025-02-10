@@ -17,12 +17,14 @@ export class TransformCharacter {
 			tActor = target.actor;
 			if (tActor.uuid == actor.uuid)
 				target = null;
+			if (!game.keyboard.isModifierActive(KeyboardManager.MODIFIER_KEYS.SHIFT))
+				target = null;
 		}
 
 		if (!target) {
 			let targetUuid = actor.getFlag('trans-char', 'uuid');
 			if (!targetUuid) {
-				ui.notifications.warn('You must select a target token to transform into.');
+				ui.notifications.warn('You must select a target token to transform into. Target the token and hold Shift, then execute the Transform macro.');
 				return;
 			}
 			let [str, uuid] = targetUuid.split('.');

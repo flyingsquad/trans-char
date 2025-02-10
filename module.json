@@ -12,8 +12,8 @@
     "verified": "12"
   },
   "esmodules": ["trans-char.js"],
-  "version": "0.0.2",
+  "version": "0.0.3",
   "url": "https://github.com/flyingsquad/trans-char",
   "manifest": "https://raw.githubusercontent.com/flyingsquad/trans-char/main/module.json",
-  "download": "https://github.com/flyingsquad/trans-char/archive/refs/tags/v0.0.2.zip"
+  "download": "https://github.com/flyingsquad/trans-char/archive/refs/tags/v0.0.3.zip"
 }
