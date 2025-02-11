@@ -112,6 +112,9 @@ export class TransformCharacter {
 		}
 		*/
 		await this.swapTokensInCombat(token, target);
+		ChatMessage.create({
+			content: `${token.name} has transformed into ${target.name}.`
+		});
 		await canvas.scene.deleteEmbeddedDocuments('Token', [token.id]);
 	}
 
