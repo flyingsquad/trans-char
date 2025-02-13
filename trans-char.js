@@ -140,14 +140,29 @@ export class TransformCharacter {
                 });
             }
             await game.swadeShapeChanger.socket.executeAsGM("updateCombatant", combatUpdateData);
-        }
-    }
+		}
+	}
+
+	async healTarget() {
+		if (game.user.targets.size != 1) {
+		  ui.notifications.warn('You must target exactly one token to heal.');
+		  return;
+		}
+
+		let token = game.user.targets.first();
+		if (token.actor.system.wounds.value <= 0) {
+			ui.notifications.notify(`${token.name} has no wounds to heal.`);
+			return;
+		}
+
+		await TransformCharacter.socket.executeAsGM("healTargetGM", game.user.id, token.scene._id, token.id);
+	}
 
 	static {
-		console.log("swade-charcheck | Swade Character Check loaded.");
+		console.log("trans-char | Swade Transform character loaded.");
 
 		Hooks.on("init", function() {
-			console.log("swade-charcheck | Swade Character Check initialized.");
+			console.log("trans-char | Swade Transform character initialized.");
 			if (!game.swadeTransformChar) {
 				game.swadeTransformChar = new TransformCharacter();
 				CONFIG.TransformChar = {transform: game.swadeTranformChar.transform};
@@ -155,8 +170,39 @@ export class TransformCharacter {
 		});
 
 		Hooks.on("ready", function() {
-		  console.log("swade-charcheck | Swade Character Check ready to accept game data.");
+		  console.log("trans-char | Swade Transform character ready to accept game data.");
 		});
+
+		let socket;
+		
+		Hooks.once("socketlib.ready", () => {
+			TransformCharacter.socket = socketlib.registerModule("trans-char");
+			TransformCharacter.socket.register("healTargetGM", healTargetGM);
+		});
+
+		function healTargetGM(playerID, sceneID, tokenID) {
+			let scene = game.scenes.get(sceneID);
+			let token = scene.tokens.get(tokenID);
+			let actor = token.actor;
+
+			console.log(`Healing ${token.name}`);
+			const wounds = 1;
+			const currentWounds = actor.system.wounds.value
+			const newWounds = Math.max(currentWounds - wounds, 0)
+			if (newWounds <= actor.system.wounds.max) {
+				actor.update({"system.wounds.value": newWounds})
+				let chatData = {
+					user: playerID,
+					content: `${token.name} healed for one wound.`
+				};
+				ChatMessage.create(chatData);
+			} else {
+				actor.update({"system.wounds.value": actor.system.wounds.max})
+				const incap = game.swade.util.getStatusEffectDataById('incapacitated', {active: true})
+				actor.toggleActiveEffect(incap)
+			}
+		}
+
 	}
 }
 
