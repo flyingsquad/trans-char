@@ -165,7 +165,7 @@ export class TransformCharacter {
 			console.log("trans-char | Swade Transform character initialized.");
 			if (!game.swadeTransformChar) {
 				game.swadeTransformChar = new TransformCharacter();
-				CONFIG.TransformChar = {transform: game.swadeTranformChar.transform};
+				CONFIG.TransformChar = {transform: game.swadeTransformChar.transform};
 			}
 		});
 
