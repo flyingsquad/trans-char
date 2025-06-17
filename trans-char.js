@@ -47,7 +47,7 @@ export class TransformCharacter {
 			await tActor.setFlag('trans-char', 'uuid', actor.uuid);
 		}
 		console.log(`${actor.name} => ${tActor.name}`);
-		await tActor.update({"system.bennies": actor.system.bennies,
+		await tActor.update({"system.bennies.value": actor.system.bennies.value,
 			"system.fatigue.value": actor.system.fatigue.value,
 			"system.wounds.value": actor.system.wounds.value});
 			/*
