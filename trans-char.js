@@ -11,6 +11,23 @@ export class TransformCharacter {
 	COMPENDIUM_KEY = "swade-core-rules.swade-specialabilities";
 
 	async summon(token) {
+		let summonEffect = {
+			name: "Summon Ally",
+			icon: "modules/trans-char/icons/summon.jpg",
+			origin: null,
+			disabled: false,
+			duration: {
+			  seconds: 24,
+			  rounds: 4,
+  			  startTime: game.time.worldTime,
+			  startRound: game?.combat?.current?.round
+			},
+			system: {
+				expiration: 2
+			},
+			description: "<p>Summoned Ally</p>"
+		};
+
 		if (!token) {
 			ui.notifications.warn('A token must be selected to perform the summon.');
 			return;
@@ -94,12 +111,23 @@ export class TransformCharacter {
 					callback: async (event, button, dialog) => {
 						const uuid = button.form.elements.summon.value;
 						let number = button.form.elements.number.value;
+
+						let summoned;
+
 						if (uuid == 'mirror') {
-							this.mirrorSelf(token, button.form.elements.raise.checked, number);
+							summonEffect.name = `Summon Ally Mirror Self`;
+						} else {
+							summoned = game.actors.get(uuid);
+							summonEffect.name = `Summon Ally ${summoned.name}`;
+						}
+						summonEffect.origin =`Actor.${actor.id}`;
+
+						await actor.createEmbeddedDocuments("ActiveEffect", [summonEffect]);	
+
+						if (uuid == 'mirror') {
+							this.mirrorSelf(token, button.form.elements.raise.checked, number, summonEffect);
 							return;
 						}
-
-						let summoned = game.actors.get(uuid);
 
 						let tokens = [];
 						for (let i = 1; i <= number; i++) {
@@ -123,6 +151,12 @@ export class TransformCharacter {
 								"system.bennies.value": 0,
 								"system.bennies.max": 0
 							});
+							t.actor.setFlag('trans-char', 'expiration', {
+								summoned: true,
+								sourceActorId: actor.id,
+								expires: game.time.worldTime + 30
+							});
+							await t.actor.createEmbeddedDocuments("ActiveEffect", [summonEffect]);	
 						}
 						const msg = `${actor.name} summoned ${number==1?'': number + ' '}${summoned.name}${number==1?'':'s'}.`;
 						await ChatMessage.create({content: msg});
@@ -143,6 +177,11 @@ export class TransformCharacter {
 					}
 				},
 				{
+					action: "delete",
+					label: "Delete Summons",
+					callback: async (event, button, dialog) => { this.cleanup(actor) }
+				},
+				{
 					action: "cancel",
 					label: "Cancel",
 					callback: (event, button, dialog) => null
@@ -150,7 +189,60 @@ export class TransformCharacter {
 			]
 		});
 	}
-	
+
+	async cleanup(summoner) {
+		let names = '';
+		let ids = [];
+		for (let t of canvas.scene.tokens) {
+			const expiration = t.actor.getFlag('trans-char', 'expiration');
+			if (expiration && expiration.summoned && expiration.sourceActorId == summoner.id) {
+				ids.push(t.id);
+				if (names)
+					names += ', ';
+				names += t.name;
+			}
+		}
+		let actors = game.actors.filter(a => {
+			const e = a.getFlag('trans-char', 'expiration');
+			return e && e.summoned && e.sourceActorId == summoner.id;
+		});
+		let actorNames = '';
+		for (let a of actors) {
+			if (actorNames)
+				actorNames += ', ';
+			actorNames += a.name;
+		}
+		let list = '';
+		if (names)
+			list += `Tokens: ${names}</br>`;
+		if (actorNames)
+			list += `Actors: ${actorNames}</br>`;
+		if (!list)
+			list = "None found";
+
+		await foundry.applications.api.DialogV2.wait({
+			window: { title: "Delete Summoned Actors?" },
+			content: `<p>This will delete the following summoned tokens and actors:</p><p>` + list + '</p>',
+			buttons: [
+				{
+					action: "ok",
+					label: "Yes",
+					callback: async (event, button, dialog) => {
+						if (ids.length > 0)
+							await canvas.scene.deleteEmbeddedDocuments('Token', ids);
+						console.log('trans-char | deleting ' + names + '|' + actorNames);
+						for (let a of actors)
+							a.delete();
+					}
+				},
+				{
+					action: "cancel",
+					label: "No",
+					callback: (event, button, dialog) => {}
+				}
+			]
+		});
+	}
 	
 	async addItems(packName, actor, itemNames) {
 		// Load the compendium
@@ -186,7 +278,7 @@ export class TransformCharacter {
 		return true;
 	}
 
-	async mirrorSelf(token, raise, number) {
+	async mirrorSelf(token, raise, number, summonEffect) {
 		if (!token) {
 		  ui.notifications.error('No token selected.')
 		  return;
@@ -256,10 +348,10 @@ export class TransformCharacter {
 
 		// Mark as summoned ally (for cleanup later)
 		cloneData.flags = cloneData.flags || {};
-		cloneData.flags.swadeSummon = {
-		  summoned: true,
-		  sourceActorId: actor.id,
-		  expires: game.time.worldTime + 30
+		cloneData.flags['trans-char'].expiration = {
+			summoned: true,
+			sourceActorId: actor.id,
+			expires: game.time.worldTime + 30
 		};
 
 		// Create the clone actor
@@ -295,6 +387,9 @@ export class TransformCharacter {
 				hidden: false,
 				disposition: token.document.disposition
 			}, { parent: canvas.scene });
+
+			if (summonEffect)
+				await newToken.actor.createEmbeddedDocuments("ActiveEffect", [summonEffect]);	
 
 			// If PC flip the token in the X direction to indicate it's the mirror to help player
 			// know which is which.
@@ -349,19 +444,10 @@ export class TransformCharacter {
 			await actor.setFlag('trans-char', 'uuid', tActor.uuid);
 			await tActor.setFlag('trans-char', 'uuid', actor.uuid);
 		}
-		console.log(`${actor.name} => ${tActor.name}`);
+		console.log(`trans-char | ${actor.name} => ${tActor.name}`);
 		await tActor.update({"system.bennies.value": actor.system.bennies.value,
 			"system.fatigue.value": actor.system.fatigue.value,
 			"system.wounds.value": actor.system.wounds.value});
-			/*
-			  "system.status.isShaken": actor.system.status.isShaken,
-			  "system.status.isDistracted": actor.system.status.isDistracted,
-			  "system.status.isEntangled": actor.system.status.isEntangled,
-			  "system.status.isIncapacitated": actor.system.status.isIncapacitated,
-			  "system.status.isShaken": actor.system.status.isShaken,
-			  "system.status.isStunned": actor.system.status.isStunned,
-			  "system.status.isBound": actor.system.status.isBound
-			*/
 		if (actor.system.status.isShaken != tActor.system.status.isShaken) {
 			const shaken = game.swade.util.getStatusEffectDataById('shaken', {active: actor.system.status.isShaken});
 			await tActor.toggleActiveEffect(shaken);
@@ -403,17 +489,6 @@ export class TransformCharacter {
 			target.document.update({"x": token.x, "y": token.y});
 			tDoc = target.document;
 		}
-		/*
-		let combat = game.combats.find(c => c.scene._id == canvas.scene.id);
-		let combatants = combat.combatants.filter(c => c.tokenId == token.id);
-		for (let combatant of combatants) {
-			await combatant.update({
-				"_id": combatant.id,
-				"tokenId": target.id,
-				"actorId": target.actorId
-			});
-		}
-		*/
 		await this.swapTokensInCombat(token, target);
 		ChatMessage.create({
 			content: `${token.name} has transformed into ${target.name}.`
@@ -488,7 +563,7 @@ export class TransformCharacter {
 			let token = scene.tokens.get(tokenID);
 			let actor = token.actor;
 
-			console.log(`Healing ${token.name}`);
+			console.log(`trans-char | Healing ${token.name}`);
 			const wounds = 1;
 			const currentWounds = actor.system.wounds.value
 			const newWounds = Math.max(currentWounds - wounds, 0)
