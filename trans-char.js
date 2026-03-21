@@ -159,7 +159,10 @@ export class TransformCharacter {
 							await t.actor.createEmbeddedDocuments("ActiveEffect", [summonEffect]);	
 						}
 						const msg = `${actor.name} summoned ${number==1?'': number + ' '}${summoned.name}${number==1?'':'s'}.`;
-						await ChatMessage.create({content: msg});
+						let chatData = {content: msg};
+						if (game.user.isGM && token.document.disposition != CONST.TOKEN_DISPOSITIONS.FRIENDLY)
+							chatData.whisper = [game.user._id];
+						await ChatMessage.create(chatData);	
 					}
 				},
 				{
@@ -398,7 +401,10 @@ export class TransformCharacter {
 				newToken.update({"texture.scaleX": -token.document.texture.scaleX});
 		}
 		const msg = `${actor.name} summoned ${number==1?'': number + ' '}${cloneActor.name}${number==1?'':'s'}.`;
-		await ChatMessage.create({content: msg});
+		let chatData = {content: msg};
+		if (game.user.isGM && token.document.disposition != CONST.TOKEN_DISPOSITIONS.FRIENDLY)
+			chatData.whisper = [game.user._id];
+		await ChatMessage.create(chatData);
 	}
 
 	async transform(token) {
