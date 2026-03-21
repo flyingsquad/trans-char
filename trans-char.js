@@ -87,7 +87,7 @@ export class TransformCharacter {
 			summons = newSummons;
 		}
 		
-		content += `<option value="mirror">Mirror</option>\n`;
+		content += `<option value="mirror">Mirror Self</option>\n`;
 
 		content += `</select></p>
 			<p><label>Number to summon: <input type="number" id="number" name="number" min="1" value="1" width="20"/></label></p>
@@ -397,6 +397,8 @@ export class TransformCharacter {
 			if (!isNPC)
 				newToken.update({"texture.scaleX": -token.document.texture.scaleX});
 		}
+		const msg = `${actor.name} summoned ${number==1?'': number + ' '}${cloneActor.name}${number==1?'':'s'}.`;
+		await ChatMessage.create({content: msg});
 	}
 
 	async transform(token) {
