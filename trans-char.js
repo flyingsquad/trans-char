@@ -346,16 +346,14 @@ export class TransformCharacter {
 		  !(i.flags['swade-make-magic']?.isMagic || i.system.category == 'Magic Item')
 		);
 
-		// Mark as summoned ally (for cleanup later)
-		cloneData.flags = cloneData.flags || {};
-		cloneData.flags['trans-char'].expiration = {
+		// Create the clone actor
+		const cloneActor = await Actor.create(cloneData);
+		await cloneActor.setFlag('trans-char', 'expiration', {
 			summoned: true,
 			sourceActorId: actor.id,
 			expires: game.time.worldTime + 30
-		};
+		});
 
-		// Create the clone actor
-		const cloneActor = await Actor.create(cloneData);
 
 		// Add Construct + Fearless abilities and Resilient if raise.
 
@@ -389,7 +387,7 @@ export class TransformCharacter {
 			}, { parent: canvas.scene });
 
 			if (summonEffect)
-				await newToken.actor.createEmbeddedDocuments("ActiveEffect", [summonEffect]);	
+				await newToken.actor.createEmbeddedDocuments("ActiveEffect", [summonEffect]);
 
 			// If PC flip the token in the X direction to indicate it's the mirror to help player
 			// know which is which.
