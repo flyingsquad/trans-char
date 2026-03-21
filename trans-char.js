@@ -132,6 +132,7 @@ export class TransformCharacter {
 						let tokens = [];
 						for (let i = 1; i <= number; i++) {
 							tokens.push(await summoned.getTokenDocument({
+								disposition: token.disposition,
 								actorLink: false,
 								x: token.x + i*canvas.grid.sizeX,
 								y: token.y
