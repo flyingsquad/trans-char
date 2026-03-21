@@ -2,6 +2,309 @@
  */
  
 export class TransformCharacter {
+	
+	/**	If tokens are targeted add them to the list of summons that can
+	 *	be performed. If nothing is targeted, put up a dialog to allow
+	 *	the user to choose which actor to summon, and the number to summon.
+	 */
+
+	COMPENDIUM_KEY = "swade-core-rules.swade-specialabilities";
+
+	async summon(token) {
+		if (!token) {
+			ui.notifications.warn('A token must be selected to perform the summon.');
+			return;
+		}
+		
+		let actor = token.actor;
+		let targets = game.user.targets;
+
+		let summons = actor.getFlag('trans-char', 'summons');
+		if (!summons)
+			summons = [];
+
+		if (targets.size > 0) {
+			let added = "";
+			for (let t of targets) {
+				let uuid = t.document.actorId;
+				
+				if (summons.find(s => s.uuid == uuid))
+					continue;
+				summons.push({name: t.actor.name, uuid: uuid});
+				if (added)
+					added += ', ';
+				added += t.actor.name;
+			}
+			actor.setFlag('trans-char', 'summons', summons);
+
+			if (added)
+				ui.notifications.notify(`Actors added to Summon list: ${added}.`);
+			else
+				ui.notifications.notify(`All targeted actors were already in the summons list.`);
+
+			return;
+		}
+		
+		let content=`<div><div>
+			<p>To add actors that can be summoned for this character target tokens and run this again.</p>
+			<p>Click Remove from List to remove the selected actor from the list.</p>
+			<p><label>Summon </label> <select id="summon">\n`;
+
+		// List available summons and delete missing actors from the list.
+
+		let newSummons = [];
+
+		for (let s of summons) {
+			const a = game.actors.get(s.uuid);
+			if (!a) {
+				ui.notifications.warn(`${s.name} no longer exists and cannot be summoned.`);
+				continue;
+			}
+
+			content += `<option value="${s.uuid}">${s.name}</option>\n`;
+			newSummons.push(s);
+		}
+
+		if (summons.length != newSummons.length) {
+			actor.setFlag('trans-char', 'summons', newSummons);
+			summons = newSummons;
+		}
+		
+		content += `<option value="mirror">Mirror</option>\n`;
+
+		content += `</select></p>
+			<p><label>Number to summon: <input type="number" id="number" name="number" min="1" value="1" width="20"/></label></p>
+			<p><label><input type="checkbox" id="raise" name="raise"> Raise</label></p>
+		</div></div>`;
+
+		await foundry.applications.api.DialogV2.wait({
+			window: {
+				title: "Summon",
+			  position: {
+				  width: 300,
+				  height: 500
+			  }
+			},
+			modal: true,
+			content: content,
+			buttons: [
+				{
+					action: "ok",
+					label: "Summon",
+					callback: async (event, button, dialog) => {
+						const uuid = button.form.elements.summon.value;
+						let number = button.form.elements.number.value;
+						if (uuid == 'mirror') {
+							this.mirrorSelf(token, button.form.elements.raise.checked, number);
+							return;
+						}
+
+						let summoned = game.actors.get(uuid);
+
+						let tokens = [];
+						for (let i = 1; i <= number; i++) {
+							tokens.push(await summoned.getTokenDocument({
+								actorLink: false,
+								x: token.x + i*canvas.grid.sizeX,
+								y: token.y
+							}));
+						}
+
+						let tokenList = await canvas.scene.createEmbeddedDocuments('Token', tokens);
+
+						for (const t of tokenList) {
+							if (button.form.elements.raise.checked)
+								this.addItems(this.COMPENDIUM_KEY, t.actor, ["Resilient"]);
+							// Summoned actors aren't wildcards.
+							await t.actor.update({
+								"system.wounds.max": 0,
+								"system.wounds.value": 0,
+								"system.fatigue.value": 0,
+								"system.bennies.value": 0,
+								"system.bennies.max": 0
+							});
+						}
+						const msg = `${actor.name} summoned ${number==1?'': number + ' '}${summoned.name}${number==1?'':'s'}.`;
+						await ChatMessage.create({content: msg});
+					}
+				},
+				{
+					action: "remove",
+					label: "Remove from List",
+					callback: async (event, button, dialog) => {
+						const uuid = button.form.elements.summon.value;
+						let i = summons.findIndex(s => s.uuid == uuid);
+						if (i >= 0) {
+							summons.splice(i, 1);
+							actor.setFlag('trans-char', 'summons', summons);
+							const a = game.actors.get(uuid);
+							ui.notifications.notify(`${a.name} removed from summon list.`);
+						}
+					}
+				},
+				{
+					action: "cancel",
+					label: "Cancel",
+					callback: (event, button, dialog) => null
+				}
+			]
+		});
+	}
+	
+	
+	async addItems(packName, actor, itemNames) {
+		// Load the compendium
+
+		const pack = game.packs.get(packName);
+		if (!pack) {
+			ui.notifications.error(`Compendium not found: ${packName}`);
+			return false;
+		}
+
+		let items = [];
+
+		for (let name of itemNames) {
+			const entry = pack.index.find(e => e.name === name);
+
+			if (!entry) {
+				ui.notifications.error(`"${name}" not found in compendium.`);
+				return false;
+			}
+
+			// Load full item document
+			const itemDoc = await pack.getDocument(entry._id);
+
+			// Duplicate the item data
+			const itemData = itemDoc.toObject();
+			delete itemData._id;
+			items.push(itemData);
+		}
+
+		// Create the items on the actor
+
+		await actor.createEmbeddedDocuments("Item", items);
+		return true;
+	}
+
+	async mirrorSelf(token, raise, number) {
+		if (!token) {
+		  ui.notifications.error('No token selected.')
+		  return;
+		} 
+		const actor = token.actor;
+		if (!actor) {
+		  ui.notifications.error('No actor is associated with that token.')
+		  return;
+		}
+
+		const MIN_SKILL_DIE = 4;
+
+		// Utility: reduce die type by one step (min d4)
+		function downgradeDie(die) {
+		  const dice = [4, 6, 8, 10, 12];
+		  const idx = dice.indexOf(die);
+		  return dice[Math.max(0, idx - 1)];
+		}
+
+		// Clone actor data
+
+		const cloneData = foundry.utils.duplicate(actor.toObject());
+		const isNPC = actor.type == 'npc' || token.document.disposition != 1;
+		if (isNPC)
+		  cloneData.name = actor.name;
+		else
+		  cloneData.name = `Mirror ${actor.name}`;
+
+		// Make the clone an Extra and junk all the temporary
+		// effects.
+
+		cloneData.type = 'npc';
+		cloneData.system.wildcard = false;
+		cloneData.system.wounds.max = 0;
+		cloneData.system.wounds.value = 0;
+		cloneData.system.fatigue.value = 0;
+		cloneData.system.bennies.value = 0;
+		cloneData.system.bennies.max = 0;
+
+		cloneData.system.details.archetype = 'Mirror';
+
+		cloneData.effects = [];
+
+		// Reduce skills by one die type (attributes unchanged)
+
+		for (const [skillId, skill] of Object.entries(cloneData.items ?? {})) {
+		  if (skill.type === "skill") {
+			const die = skill.system.die?.sides;
+			if (die) {
+			  const newDie = downgradeDie(die);
+			  skill.system.die.sides = newDie;
+			}
+		  }
+		}
+
+		// Remove Summon Ally power
+
+		cloneData.items = cloneData.items.filter(i =>
+		  !(i.type === "power" && i.system.swid == 'summon-ally')
+		);
+
+		// Remove magic items.
+
+		cloneData.items = cloneData.items.filter(i =>
+		  !(i.flags['swade-make-magic']?.isMagic || i.system.category == 'Magic Item')
+		);
+
+		// Mark as summoned ally (for cleanup later)
+		cloneData.flags = cloneData.flags || {};
+		cloneData.flags.swadeSummon = {
+		  summoned: true,
+		  sourceActorId: actor.id,
+		  expires: game.time.worldTime + 30
+		};
+
+		// Create the clone actor
+		const cloneActor = await Actor.create(cloneData);
+
+		// Add Construct + Fearless abilities and Resilient if raise.
+
+		let itemNames = ['Construct', 'Fearless'];
+
+		if (raise)
+			itemNames.push('Resilient');
+
+		this.addItems(this.COMPENDIUM_KEY, cloneActor, itemNames);
+
+		// Spawn token(s) near caster.
+		
+		for (let i = 1; i <= number; i++) {
+			const spawnX = token.x + i * canvas.grid.size;
+			const spawnY = token.y;
+
+			let newToken = await TokenDocument.create({
+				name: isNPC ? token.document.name : `Mirror ${token.document.name}`,
+				actorId: cloneActor.id,
+				actorLink: false,
+				bar1: token.document.bar1,
+				bar2: token.document.bar2,
+				displayBars: token.document.displayBars,
+				displayName: token.document.displayName,
+				lockedRotation: token.document.lockedRotation,
+				texture: token.document.texture,
+				x: spawnX,
+				y: spawnY,
+				hidden: false,
+				disposition: token.document.disposition
+			}, { parent: canvas.scene });
+
+			// If PC flip the token in the X direction to indicate it's the mirror to help player
+			// know which is which.
+			// Don't do this for NPCs to make it hard for players to figure out which is
+			// the mirror.
+
+			if (!isNPC)
+				newToken.update({"texture.scaleX": -token.document.texture.scaleX});
+		}
+	}
 
 	async transform(token) {
 		if (!token) {
