@@ -9,6 +9,128 @@ export class TransformCharacter {
 	 */
 
 	COMPENDIUM_KEY = "swade-core-rules.swade-specialabilities";
+	
+	async manageSummons(actor) {
+		let summons = actor.getFlag('trans-char', 'summons');
+		if (!summons)
+			summons = [];
+
+		let content=`<div><div>
+			<p>Click Remove to remove the selected actor from the list.</p>
+			<p>Enter an actor UUID and click Add to add the actor to the Summon list.</p>
+			<p>Click Add Targets to add the targeted tokens to the Summon list.</p>
+			<p><label>Actors </label> <select id="summon">\n`;
+
+		// List available summons and delete missing actors from the list.
+
+		let newSummons = [];
+
+		for (let s of summons) {
+			const a = await fromUuid(s.uuid);
+			if (!a) {
+				ui.notifications.warn(`${s.name} no longer exists and cannot be summoned.`);
+				continue;
+			}
+
+			content += `<option value="${s.uuid}">${s.name}</option>\n`;
+			newSummons.push(s);
+		}
+
+		if (summons.length != newSummons.length) {
+			actor.setFlag('trans-char', 'summons', newSummons);
+			summons = newSummons;
+		}
+		
+		content += `</select></p>
+			<p><label>UUID of New Summon: <input id="newsummon" type="text"></label></p>
+		</div></div>`;
+
+		await foundry.applications.api.DialogV2.wait({
+			window: {
+				title: "Manage Summons",
+				position: {
+					width: 300,
+					height: 500
+				}
+			},
+			modal: false,
+			content: content,
+			buttons: [
+				{
+					action: "remove",
+					label: "Remove",
+					callback: async (event, button, dialog) => {
+						const uuid = button.form.elements.summon.value;
+						let i = summons.findIndex(s => s.uuid == uuid);
+						if (i >= 0) {
+							summons.splice(i, 1);
+							actor.setFlag('trans-char', 'summons', summons);
+							const a = game.actors.get(uuid);
+							ui.notifications.notify(`${a.name} removed from summon list.`);
+						}
+					}
+				},
+				{
+					action: "add",
+					label: "Add",
+					callback: async (event, button, dialog) => {
+						const uuid = button.form.elements.newsummon.value;
+						const a = await fromUuid(uuid);
+						if (!a) {
+							ui.notifications.warn(`No actor found for UUID ${uuid}`);
+							return;
+						}
+						if (!(a instanceof Actor)) {
+							ui.notifications.warn(`UUID ${uuid} (${a.name}) is not an Actor.`);
+							return;
+						}
+						let i = summons.findIndex(s => s.uuid == uuid);
+						if (i > 0) {
+							ui.notifications.warn(`UUID ${uuid} (${a.name}) is already in the list`);
+							return;
+						}
+						summons.push({name: a.name, uuid: uuid});
+						actor.setFlag('trans-char', 'summons', summons);
+					}
+				},
+				{
+					action: "addTargets",
+					label: "Add Targets",
+					callback: async (event, button, diaog) => {
+						let targets = game.user.targets;
+	
+						if (targets.size <= 0) {
+							ui.notifications.notify(`First target tokens that you wish to add to the list.`);
+							return;
+						}
+						let added = "";
+						for (let t of targets) {
+							let uuid = 'Actor.' + t.document.actorId;
+							
+							if (summons.find(s => s.uuid == uuid))
+								continue;
+							summons.push({name: t.actor.name, uuid: uuid});
+							if (added)
+								added += ', ';
+							added += t.actor.name;
+						}
+						actor.setFlag('trans-char', 'summons', summons);
+
+						if (added)
+							ui.notifications.notify(`Actors added to Summon list: ${added}.`);
+						else
+							ui.notifications.notify(`All targeted actors were already in the summons list.`);
+					}
+				},
+				{
+					action: "cancel",
+					label: "Cancel",
+					callback: (event, button, dialog) => null
+				}
+			]
+		});		
+	}
+	
 
 	async summon(token) {
 		let summonEffect = {
@@ -34,45 +156,23 @@ export class TransformCharacter {
 		}
 		
 		let actor = token.actor;
-		let targets = game.user.targets;
 
 		let summons = actor.getFlag('trans-char', 'summons');
 		if (!summons)
 			summons = [];
 
-		if (targets.size > 0) {
-			let added = "";
-			for (let t of targets) {
-				let uuid = t.document.actorId;
-				
-				if (summons.find(s => s.uuid == uuid))
-					continue;
-				summons.push({name: t.actor.name, uuid: uuid});
-				if (added)
-					added += ', ';
-				added += t.actor.name;
-			}
-			actor.setFlag('trans-char', 'summons', summons);
-
-			if (added)
-				ui.notifications.notify(`Actors added to Summon list: ${added}.`);
-			else
-				ui.notifications.notify(`All targeted actors were already in the summons list.`);
-
-			return;
-		}
-		
 		let content=`<div><div>
-			<p>To add actors that can be summoned for this character target tokens and run this again.</p>
-			<p>Click Remove from List to remove the selected actor from the list.</p>
-			<p><label>Summon </label> <select id="summon">\n`;
+			<p>To summon an actor select it in the Actor dropdown list and click Summon.</p>
+			<p>To delete summoned tokens and actors click Delete Summoned.</p>
+			<p>To add/remove actors from the Actor list click Manage.</p>
+			<p><label>Actor </label> <select id="summon">\n`;
 
 		// List available summons and delete missing actors from the list.
 
 		let newSummons = [];
 
 		for (let s of summons) {
-			const a = game.actors.get(s.uuid);
+			const a = fromUuid(s.uuid);
 			if (!a) {
 				ui.notifications.warn(`${s.name} no longer exists and cannot be summoned.`);
 				continue;
@@ -102,7 +202,7 @@ export class TransformCharacter {
 				  height: 500
 			  }
 			},
-			modal: true,
+			modal: false,
 			content: content,
 			buttons: [
 				{
@@ -112,27 +212,52 @@ export class TransformCharacter {
 						const uuid = button.form.elements.summon.value;
 						let number = button.form.elements.number.value;
 
-						let summoned;
+						summonEffect.origin =`Actor.${actor.id}`;
 
 						if (uuid == 'mirror') {
 							summonEffect.name = `Summon Ally Mirror Self`;
-						} else {
-							summoned = game.actors.get(uuid);
-							summonEffect.name = `Summon Ally ${summoned.name}`;
-						}
-						summonEffect.origin =`Actor.${actor.id}`;
-
-						await actor.createEmbeddedDocuments("ActiveEffect", [summonEffect]);	
-
-						if (uuid == 'mirror') {
+							await actor.createEmbeddedDocuments("ActiveEffect", [summonEffect]);
 							this.mirrorSelf(token, button.form.elements.raise.checked, number, summonEffect);
 							return;
 						}
 
+						// Find the source actor from the UUID
+						let source = await fromUuid(uuid);
+						if (!source) {
+							ui.notifications.warn(`Actor for UUID ${uuid} no longer exists.`);
+							return;
+						}
+						if (!(source instanceof Actor)) {
+							ui.notifications.warn(`UUID ${uuid} is not an Actor.`);
+							return;
+						}
+
+						// Create a new actor and mark it as summoned so it can be deleted easily.
+
+						let summonData = source.toObject();
+
+						summonData.ownership = actor.ownership;
+						summonData.type = 'npc';
+						summonData.folder = await this.getSummonFolderId();
+						let summoned = await Actor.create(summonData);
+						
+						if (!summoned) {
+							ui.notifications.warn(`Unable to create ${summonData.name}`);
+							return;
+						}
+						summoned.setFlag('trans-char', 'expiration', {
+							summoned: true,
+							sourceActorId: actor.id,
+							expires: game.time.worldTime + 30
+						});
+
+						summonEffect.name = `Summon Ally ${summoned.name}`;
+						await actor.createEmbeddedDocuments("ActiveEffect", [summonEffect]);
+
 						let tokens = [];
 						for (let i = 1; i <= number; i++) {
 							tokens.push(await summoned.getTokenDocument({
-								disposition: token.disposition,
+								disposition: token.document.disposition,
 								actorLink: false,
 								x: token.x + i*canvas.grid.sizeX,
 								y: token.y
@@ -167,23 +292,16 @@ export class TransformCharacter {
 					}
 				},
 				{
-					action: "remove",
-					label: "Remove from List",
-					callback: async (event, button, dialog) => {
-						const uuid = button.form.elements.summon.value;
-						let i = summons.findIndex(s => s.uuid == uuid);
-						if (i >= 0) {
-							summons.splice(i, 1);
-							actor.setFlag('trans-char', 'summons', summons);
-							const a = game.actors.get(uuid);
-							ui.notifications.notify(`${a.name} removed from summon list.`);
-						}
-					}
+					action: "delete",
+					label: "Delete Summoned",
+					callback: async (event, button, dialog) => { this.cleanup(actor) }
 				},
 				{
-					action: "delete",
-					label: "Delete Summons",
-					callback: async (event, button, dialog) => { this.cleanup(actor) }
+					action: "manage",
+					label: "Manage",
+					callback: async (event, button, dialog) => {
+						this.manageSummons(actor);
+					}
 				},
 				{
 					action: "cancel",
@@ -192,6 +310,24 @@ export class TransformCharacter {
 				}
 			]
 		});
+	}
+
+	async getSummonFolderId() {
+		const folderName = "Summoned Actors";
+
+		// Check if the folder already exists
+		let folder = game.folders.find(f => f.name === folderName && f.type === "Actor");
+		if (folder)
+			return folder.id;
+
+		// If not, create it
+		folder = await Folder.create({
+			name: folderName,
+			type: "Actor",
+			parent: null
+		});
+		console.log(`Created folder: ${folderName}`);
+		return folder.id;
 	}
 
 	async cleanup(summoner) {
@@ -237,6 +373,10 @@ export class TransformCharacter {
 						console.log('trans-char | deleting ' + names + '|' + actorNames);
 						for (let a of actors)
 							a.delete();
+						let effects = summoner.effects.filter(e => e.name.startsWith("Summon Ally"));
+						if (effects.length > 0) {
+							summoner.deleteEmbeddedDocuments("ActiveEffect", effects.map(e => e.id));
+						}
 					}
 				},
 				{
@@ -304,7 +444,10 @@ export class TransformCharacter {
 
 		// Clone actor data
 
-		const cloneData = foundry.utils.duplicate(actor.toObject());
+		let cloneData = foundry.utils.duplicate(actor.toObject());
+		cloneData._id = cloneData.id = null;
+		//cloneData.folder = this.getSummonFolderId();
+
 		const isNPC = actor.type == 'npc' || token.document.disposition != 1;
 		if (isNPC)
 		  cloneData.name = actor.name;
@@ -351,7 +494,7 @@ export class TransformCharacter {
 		);
 
 		// Create the clone actor
-		const cloneActor = await Actor.create(cloneData);
+		let cloneActor = await Actor.create(cloneData);
 		await cloneActor.setFlag('trans-char', 'expiration', {
 			summoned: true,
 			sourceActorId: actor.id,
@@ -581,13 +724,13 @@ export class TransformCharacter {
 					content: `${token.name} healed for one wound.`
 				};
 				ChatMessage.create(chatData);
-			} else {
-				actor.update({"system.wounds.value": actor.system.wounds.max})
-				const incap = game.swade.util.getStatusEffectDataById('incapacitated', {active: true})
-				actor.toggleActiveEffect(incap)
+								
+				let effects = actor.effects.filter(e => e.name === "Incapacitated" || e.name === "Defeated" );
+				if (effects.length > 0) {
+					actor.deleteEmbeddedDocuments("ActiveEffect", effects.map(e => e.id));
+				}
 			}
 		}
-
 	}
 }
 
