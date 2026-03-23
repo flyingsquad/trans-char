@@ -10,6 +10,16 @@ export class TransformCharacter {
 
 	COMPENDIUM_KEY = "swade-core-rules.swade-specialabilities";
 	
+	compareAlpha(a, b) {
+		const nameA = a.name.toUpperCase();
+		const nameB = b.name.toUpperCase();
+		if (nameA < nameB)
+			return -1;
+		if (nameA > nameB)
+			return 1;
+		return 0;							
+	}
+	
 	async manageSummons(actor) {
 		let summons = actor.getFlag('trans-char', 'summons');
 		if (!summons)
@@ -17,8 +27,6 @@ export class TransformCharacter {
 
 		let content=`<div><div>
 			<p>Click Remove to remove the selected actor from the list.</p>
-			<p>Enter an actor UUID and click Add to add the actor to the Summon list.</p>
-			<p>Click Add Targets to add the targeted tokens to the Summon list.</p>
 			<p><label>Actors </label> <select id="summon">\n`;
 
 		// List available summons and delete missing actors from the list.
@@ -41,8 +49,12 @@ export class TransformCharacter {
 			summons = newSummons;
 		}
 		
+		summons = summons.sort((a, b) => this.compareAlpha(a, b));
+		
 		content += `</select></p>
-			<p><label>UUID of New Summon: <input id="newsummon" type="text"></label></p>
+			<p><label>Enter the UUIDs of New Summons separated by blanks or commas and click Add.</br><textarea id="newsummon" name="newsummon" rows="4" cols="80"></textarea>
+			</label></p>
+			<p>Click Add Targets to add the targeted tokens to the Summon list.</p>
 		</div></div>`;
 
 		await foundry.applications.api.DialogV2.wait({
@@ -63,10 +75,9 @@ export class TransformCharacter {
 						const uuid = button.form.elements.summon.value;
 						let i = summons.findIndex(s => s.uuid == uuid);
 						if (i >= 0) {
+							ui.notifications.notify(`${summons[i].name} removed from summon list.`);
 							summons.splice(i, 1);
 							actor.setFlag('trans-char', 'summons', summons);
-							const a = game.actors.get(uuid);
-							ui.notifications.notify(`${a.name} removed from summon list.`);
 						}
 					}
 				},
@@ -74,22 +85,31 @@ export class TransformCharacter {
 					action: "add",
 					label: "Add",
 					callback: async (event, button, dialog) => {
-						const uuid = button.form.elements.newsummon.value;
-						const a = await fromUuid(uuid);
-						if (!a) {
-							ui.notifications.warn(`No actor found for UUID ${uuid}`);
+						const uuids = button.form.elements.newsummon.value;
+						if (!uuids) {
+							ui.notifications.notify("No UUIDs were entered.");
 							return;
 						}
-						if (!(a instanceof Actor)) {
-							ui.notifications.warn(`UUID ${uuid} (${a.name}) is not an Actor.`);
-							return;
+
+						let uuidArray = uuids.split(/[, ]+/);
+						for (const uuid of uuidArray) {
+							const a = await fromUuid(uuid);
+							if (!a) {
+								ui.notifications.warn(`No actor found for UUID ${uuid}`);
+								return;
+							}
+							if (!(a instanceof Actor)) {
+								ui.notifications.warn(`UUID ${uuid} (${a.name}) is not an Actor.`);
+								return;
+							}
+							let i = summons.findIndex(s => s.uuid == uuid);
+							if (i > 0) {
+								ui.notifications.warn(`UUID ${uuid} (${a.name}) is already in the list`);
+								return;
+							}
+							summons.push({name: a.name, uuid: uuid});
 						}
-						let i = summons.findIndex(s => s.uuid == uuid);
-						if (i > 0) {
-							ui.notifications.warn(`UUID ${uuid} (${a.name}) is already in the list`);
-							return;
-						}
-						summons.push({name: a.name, uuid: uuid});
+						summons = summons.sort((a, b) => this.compareAlpha(a, b));
 						actor.setFlag('trans-char', 'summons', summons);
 					}
 				},
@@ -171,6 +191,8 @@ export class TransformCharacter {
 
 		let newSummons = [];
 
+		summons = summons.sort((a, b) => this.compareAlpha(a, b));
+
 		for (let s of summons) {
 			const a = fromUuid(s.uuid);
 			if (!a) {
@@ -186,7 +208,7 @@ export class TransformCharacter {
 			actor.setFlag('trans-char', 'summons', newSummons);
 			summons = newSummons;
 		}
-		
+
 		content += `<option value="mirror">Mirror Self</option>\n`;
 
 		content += `</select></p>
@@ -235,6 +257,15 @@ export class TransformCharacter {
 						// Create a new actor and mark it as summoned so it can be deleted easily.
 
 						let summonData = source.toObject();
+
+						// Reduce skills and power points if source actor is character, as with Mirror Self.
+
+						if (summonData.type == 'character') {
+							this.reduceSkills(summonData);
+							if (summonData.system.powerPoints?.general?.value > actor.system.powerPoints?.general?.value) {
+								summonData.system.powerPoints.general.value = actor.system.powerPoints.general.value;
+							}
+						}
 
 						summonData.ownership = actor.ownership;
 						summonData.type = 'npc';
@@ -421,6 +452,29 @@ export class TransformCharacter {
 		await actor.createEmbeddedDocuments("Item", items);
 		return true;
 	}
+	
+	
+	reduceSkills(cloneData) {
+		// Reduce skills by one die type (attributes unchanged)
+
+		// Utility: reduce die type by one step (min d4)
+
+		function downgradeDie(die) {
+		  const dice = [4, 6, 8, 10, 12];
+		  const idx = dice.indexOf(die);
+		  return dice[Math.max(0, idx - 1)];
+		}
+
+		for (const [skillId, skill] of Object.entries(cloneData.items ?? {})) {
+		  if (skill.type === "skill") {
+			const die = skill.system.die?.sides;
+			if (die) {
+			  const newDie = downgradeDie(die);
+			  skill.system.die.sides = newDie;
+			}
+		  }
+		}
+	}
 
 	async mirrorSelf(token, raise, number, summonEffect) {
 		if (!token) {
@@ -468,18 +522,8 @@ export class TransformCharacter {
 		cloneData.system.details.archetype = 'Mirror';
 
 		cloneData.effects = [];
-
-		// Reduce skills by one die type (attributes unchanged)
-
-		for (const [skillId, skill] of Object.entries(cloneData.items ?? {})) {
-		  if (skill.type === "skill") {
-			const die = skill.system.die?.sides;
-			if (die) {
-			  const newDie = downgradeDie(die);
-			  skill.system.die.sides = newDie;
-			}
-		  }
-		}
+		
+		this.reduceSkills(cloneData);
 
 		// Remove Summon Ally power
 
