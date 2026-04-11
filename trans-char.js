@@ -1,6 +1,53 @@
 /**	Perform standard point buy method for character abilities.
  */
- 
+
+class ManageSummonDialog extends foundry.applications.api.DialogV2 {
+	/** @override */
+	async _onRender(context, options) {
+		await super._onRender(context, options);
+
+		const { DragDrop } = foundry.applications.ux;
+
+		async function onDrop(event) {
+            const data = foundry.applications.ux.TextEditor.implementation.getDragEventData(event);
+            if (data.type == "Actor") {
+				if (!this?.element) {
+					console.warn("Dialog has no rendered element yet.");
+					return;
+				}
+				
+				// DialogV2 uses a jQuery-like wrapper
+				const html = this.element;
+				
+				const textarea = html.querySelector("#newsummon");
+				let list = textarea.value;
+				if (list)
+					list += ', ';
+				list += data.uuid;
+				textarea.value = list;
+            }
+		}
+
+		// Drop macro
+		const dnd = new DragDrop.implementation({
+            dragSelector: null,
+            dropSelector: null,
+			permissions: {
+				dragstart: false,
+				drop: true,
+			},
+			callbacks: {
+				drop: onDrop.bind(this)
+			}		  
+
+		});
+		dnd.bind(this.element);
+		console.log(dnd);
+	}
+	
+	
+}
+
 export class TransformCharacter {
 	
 	/**	If tokens are targeted add them to the list of summons that can
@@ -40,6 +87,10 @@ export class TransformCharacter {
 				continue;
 			}
 
+			// Omit duplicates.
+			if (newSummons.findIndex(summ => s.uuid == summ.uuid) >= 0)
+				continue;
+
 			content += `<option value="${s.uuid}">${s.name}</option>\n`;
 			newSummons.push(s);
 		}
@@ -50,14 +101,14 @@ export class TransformCharacter {
 		}
 		
 		summons = summons.sort((a, b) => this.compareAlpha(a, b));
-		
+
 		content += `</select></p>
-			<p><label>Enter the UUIDs of New Summons separated by blanks or commas and click Add.</br><textarea id="newsummon" name="newsummon" rows="4" cols="80"></textarea>
+			<p><label>Drag and drop actors in this dialog or enter the UUIDs of New Summons separated by blanks or commas and click Add.</br><textarea id="newsummon" name="newsummon" rows="4" cols="80"></textarea>
 			</label></p>
 			<p>Click Add Targets to add the targeted tokens to the Summon list.</p>
 		</div></div>`;
 
-		await foundry.applications.api.DialogV2.wait({
+		const dlg = new ManageSummonDialog({
 			window: {
 				title: "Manage Summons",
 				position: {
@@ -96,16 +147,16 @@ export class TransformCharacter {
 							const a = await fromUuid(uuid);
 							if (!a) {
 								ui.notifications.warn(`No actor found for UUID ${uuid}`);
-								return;
+								continue;
 							}
 							if (!(a instanceof Actor)) {
 								ui.notifications.warn(`UUID ${uuid} (${a.name}) is not an Actor.`);
-								return;
+								continue;
 							}
 							let i = summons.findIndex(s => s.uuid == uuid);
-							if (i > 0) {
+							if (i >= 0) {
 								ui.notifications.warn(`UUID ${uuid} (${a.name}) is already in the list`);
-								return;
+								continue;
 							}
 							summons.push({name: a.name, uuid: uuid});
 						}
@@ -148,7 +199,8 @@ export class TransformCharacter {
 					callback: (event, button, dialog) => null
 				}
 			]
-		});		
+		});
+		dlg.render({force: true});		
 	}
 	
 
@@ -291,7 +343,8 @@ export class TransformCharacter {
 								disposition: token.document.disposition,
 								actorLink: false,
 								x: token.x + i*canvas.grid.sizeX,
-								y: token.y
+								y: token.y,
+								elevation: token.document.elevation
 							}));
 						}
 
@@ -365,7 +418,7 @@ export class TransformCharacter {
 		let names = '';
 		let ids = [];
 		for (let t of canvas.scene.tokens) {
-			const expiration = t.actor.getFlag('trans-char', 'expiration');
+			const expiration = t?.actor?.getFlag('trans-char', 'expiration');
 			if (expiration && expiration.summoned && expiration.sourceActorId == summoner.id) {
 				ids.push(t.id);
 				if (names)
@@ -573,6 +626,7 @@ export class TransformCharacter {
 				texture: token.document.texture,
 				x: spawnX,
 				y: spawnY,
+				elevation: token.document.elevation,
 				hidden: false,
 				disposition: token.document.disposition
 			}, { parent: canvas.scene });
