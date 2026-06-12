@@ -15,6 +15,6 @@
   "esmodules": ["trans-char.js"],
   "url": "https://github.com/flyingsquad/trans-char",
   "manifest": "https://raw.githubusercontent.com/flyingsquad/trans-char/main/module.json",
-  "version": "1.0.9",
-  "download": "https://github.com/flyingsquad/trans-char/archive/refs/tags/v1.0.9.zip"
+  "version": "1.1.0",
+  "download": "https://github.com/flyingsquad/trans-char/archive/refs/tags/v1.1.0.zip"
 }

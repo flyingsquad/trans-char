@@ -283,15 +283,18 @@ export class TransformCharacter {
 					action: "ok",
 					label: "Summon",
 					callback: async (event, button, dialog) => {
+						const addSummonEffect = game.settings.get('trans-char', 'duration');
 						const uuid = button.form.elements.summon.value;
 						let number = button.form.elements.number.value;
 
 						summonEffect.origin =`Actor.${actor.id}`;
 
 						if (uuid == 'mirror') {
-							summonEffect.name = `Summon Ally Mirror Self`;
-							await actor.createEmbeddedDocuments("ActiveEffect", [summonEffect]);
-							this.mirrorSelf(token, button.form.elements.raise.checked, number, summonEffect);
+							if (addSummonEffect) {
+								summonEffect.name = `Summon Ally Mirror Self`;
+								await actor.createEmbeddedDocuments("ActiveEffect", [summonEffect]);
+							}
+							this.mirrorSelf(token, button.form.elements.raise.checked, number, addSummonEffect ? summonEffect: null);
 							return;
 						}
 
@@ -334,8 +337,10 @@ export class TransformCharacter {
 							expires: game.time.worldTime + 30
 						});
 
-						summonEffect.name = `Summon Ally ${summoned.name}`;
-						await actor.createEmbeddedDocuments("ActiveEffect", [summonEffect]);
+						if (addSummonEffect) {
+							summonEffect.name = `Summon Ally ${summoned.name}`;
+							await actor.createEmbeddedDocuments("ActiveEffect", [summonEffect]);
+						}
 
 						let tokens = [];
 						for (let i = 1; i <= number; i++) {
@@ -366,7 +371,8 @@ export class TransformCharacter {
 								sourceActorId: actor.id,
 								expires: game.time.worldTime + 30
 							});
-							await t.actor.createEmbeddedDocuments("ActiveEffect", [summonEffect]);	
+							if (addSummonEffect)
+								await t.actor.createEmbeddedDocuments("ActiveEffect", [summonEffect]);	
 						}
 						const msg = `${actor.name} summoned ${number==1?'': number + ' '}${summoned.name}${number==1?'':'s'}.`;
 						let chatData = {content: msg};
@@ -680,17 +686,40 @@ export class TransformCharacter {
 				return;
 			}
 		} else {
-			const confirmation = await Dialog.confirm({
-			  title: "Perform Transformation?",
-			  content: `<p>Transform ${actor.name} into ${tActor.name}?</p><p></p>`,
-			  yes: (html) => { return true; },
-			  no: (html) => { return false; },
+			let sync = false;
+			let content = `<p>Transform ${actor.name} into ${tActor.name}?`;
+			content += `<br><label for="sync"><input type="checkbox" id="sync" name="sync"> Sync Equipment</label></p>`;
+			const confirmation = await foundry.applications.api.DialogV2.wait({
+				window: {
+					title: "Perform Transformation?"
+				},
+				content: content,
+				modal: true,
+				buttons: [
+					{
+						action: "ok",
+						label: "Transform",
+						callback: (event, button, dialog) => {
+							sync = button.form.elements.sync.checked;
+							return true;
+						}
+					},
+					{
+						action: "cancel",
+						label: "Cancel",
+						callback: (event, button, dialog) => {
+							return false;
+						}
+					}
+				]
 			});			
 			if (!confirmation)
 				return;
 			
 			await actor.setFlag('trans-char', 'uuid', tActor.uuid);
 			await tActor.setFlag('trans-char', 'uuid', actor.uuid);
+			await actor.setFlag('trans-char', 'sync', sync);
+			await tActor.setFlag('trans-char', 'sync', sync);
 		}
 		console.log(`trans-char | ${actor.name} => ${tActor.name}`);
 		await tActor.update({"system.bennies.value": actor.system.bennies.value,
@@ -742,6 +771,51 @@ export class TransformCharacter {
 			content: `${token.name} has transformed into ${target.name}.`
 		});
 		await canvas.scene.deleteEmbeddedDocuments('Token', [token.id]);
+		if (tActor.getFlag('trans-char', 'sync'))
+			await this.syncEquipment(actor, tActor);
+	}
+
+	async syncEquipment(srcActor, dstActor) {
+		// Make a copy of the equipment on srcActor on dstActor.
+		// If an item has already been synced to the other character
+		// don't copy it again. This does have limitations: if the
+		// synced item is deleted on one character it doesn't get
+		// deleted on the other. Charges are also not dealt with at this point.
+
+		for (const item of srcActor.items) {
+			if (!['gear', 'weapon', 'armor', 'consumable', 'shield'].includes(item.type))
+				continue;
+			// Don't sync items that are added by super powers.
+			if (item.getFlag('super-noir', 'parentUuid'))
+				continue;
+			// If the item has already been synced on the other character don't do it again.
+			let syncItem = dstActor.items.find(it => it.getFlag('trans-char', 'syncUuid') == item.uuid);
+			if (!syncItem) {
+				// Mark the item as part of transformation so createItem hooks
+				// can detect what it is.
+				await item.setFlag('trans-char', 'syncUuid', "placeholder");
+				let result = await dstActor.createEmbeddedDocuments("Item", [
+					item.toObject()
+				]);
+				if (!result) {
+					ui.notifications.error(`Unable to sync ${item.name} to ${dstActor.name}.`);
+					return;
+				}
+				syncItem = result[0];
+				await item.setFlag('trans-char', 'syncUuid', syncItem.uuid);
+				await syncItem.setFlag('trans-char', 'syncUuid', item.uuid);
+			}
+			let updates = {};
+			if (item.system.quantity != syncItem.system.quantity)
+				updates['system.quantity'] = item.system.quantity;
+			if (item.system.equipStatus != syncItem.system.equipStatus)
+				updates['system.equipStatus'] = item.system.equipStatus;
+			if (Object.keys(updates).length > 0)
+				await syncItem.update(updates);
+		}
+		dstActor.update({
+			"system.details.currency": srcActor.system.details.currency
+		});
 	}
 
     async swapTokensInCombat(currentToken, newToken) {
@@ -793,6 +867,18 @@ export class TransformCharacter {
 				game.swadeTransformChar = new TransformCharacter();
 				CONFIG.TransformChar = {transform: game.swadeTransformChar.transform};
 			}
+			game.settings.register('trans-char', 'duration', {
+			  name: 'Add Duration Effect',
+			  hint: 'Add a Duration effect to actors when summoned.',
+			  scope: 'world',     // "world" = sync to db, "client" = local storage
+			  config: true,       // false if you dont want it to show in module config
+			  type: Boolean,       // Number, Boolean, String, Object
+			  default: true,
+			  onChange: value => { // value is the new value of the setting
+				//console.log('swade-charcheck | budget: ' + value)
+			  }
+			});
+
 		});
 
 		Hooks.on("ready", function() {
