@@ -261,7 +261,10 @@ export class TransformCharacter {
 			summons = newSummons;
 		}
 
-		content += `<option value="mirror">Mirror Self</option>\n`;
+		if (actor.items.find((i) => i.system.swid == 'summon-ally'))
+			content += `<option value="mirror">Mirror Self</option>\n`;
+		else
+			content += `<option value="mirror">Duplicate</option>\n`;
 
 		content += `</select></p>
 			<p><label>Number to summon: <input type="number" id="number" name="number" min="1" value="1" width="20"/></label></p>
@@ -559,7 +562,7 @@ export class TransformCharacter {
 
 		let cloneData = foundry.utils.duplicate(actor.toObject());
 		cloneData._id = cloneData.id = null;
-		//cloneData.folder = this.getSummonFolderId();
+		cloneData.folder = await this.getSummonFolderId();
 
 		const isNPC = actor.type == 'npc' || token.document.disposition != 1;
 		if (isNPC)
@@ -582,12 +585,16 @@ export class TransformCharacter {
 
 		cloneData.effects = [];
 		
-		this.reduceSkills(cloneData);
+		let duplication = cloneData.items.find((i) => i.system.swid == 'duplication');
+		let summonAlly = cloneData.items.find((i) => i.system.swid == 'summon-ally');
+		
+		if (summonAlly)
+			this.reduceSkills(cloneData);
 
-		// Remove Summon Ally power
+		// Remove Summon Ally & Duplication powers
 
 		cloneData.items = cloneData.items.filter(i =>
-		  !(i.type === "power" && i.system.swid == 'summon-ally')
+		  !(i.type === "power" && (i.system.swid == 'summon-ally' || i.system.swid == 'duplication'))
 		);
 
 		// Remove magic items.
@@ -604,15 +611,15 @@ export class TransformCharacter {
 			expires: game.time.worldTime + 30
 		});
 
+		if (summonAlly) {
+			// Add Construct + Fearless abilities and Resilient if raise.
+			let itemNames = ['Construct', 'Fearless'];
 
-		// Add Construct + Fearless abilities and Resilient if raise.
+			if (raise)
+				itemNames.push('Resilient');
 
-		let itemNames = ['Construct', 'Fearless'];
-
-		if (raise)
-			itemNames.push('Resilient');
-
-		this.addItems(this.COMPENDIUM_KEY, cloneActor, itemNames);
+			this.addItems(this.COMPENDIUM_KEY, cloneActor, itemNames);
+		}
 
 		// Spawn token(s) near caster.
 		
@@ -682,7 +689,7 @@ export class TransformCharacter {
 			let [str, uuid] = targetUuid.split('.');
 			tActor = game.actors.get(uuid);
 			if (!tActor) {
-				ui.notifications.warn('The previously selected actor does not exist.');
+				ui.notifications.warn('The previously selected actor does not exist. Target another token and press Shift, then select the Transform macro to set it up.');
 				return;
 			}
 		} else {
